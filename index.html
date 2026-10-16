@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Enter code</title>
+<style>
+html, body { margin: 0; height: 100%; background: #16181c; color: #e8e6e3; font-family: system-ui, sans-serif; overflow: hidden; }
+#lock { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+form { background: #22252b; padding: 32px; border-radius: 14px; width: min(420px, 86vw); box-shadow: 0 8px 30px #0008; }
+h1 { margin: 0 0 18px; font-size: 22px; font-weight: 600; }
+input { box-sizing: border-box; width: 100%; padding: 12px; font-size: 18px; border-radius: 8px; border: 1px solid #444a53; background: #121418; color: #fff; letter-spacing: 1px; }
+button { margin-top: 14px; width: 100%; padding: 12px; font-size: 17px; border: 0; border-radius: 8px; background: #4f7bd9; color: #fff; cursor: pointer; }
+button:disabled { background: #3a3f48; cursor: default; }
+#message { min-height: 22px; margin-top: 14px; font-size: 15px; }
+#message.bad { color: #ff8f8f; }
+canvas { display: none; position: absolute; inset: 0; width: 100%; height: 100%; }
+canvas:focus { outline: none; }
+</style>
+</head>
+<body>
+<div id="lock">
+  <form id="form" autocomplete="off">
+    <h1>Enter your code</h1>
+    <input id="code" type="password" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Code" placeholder="Code">
+    <button id="go" type="submit">Unlock</button>
+    <div id="message"></div>
+  </form>
+</div>
+<canvas id="canvas" tabindex="-1">Your browser cannot show this.</canvas>
+<script src="engine.js"></script>
+<script>
+(function () {
+  // Everything here is locked: data.bin is scrambled with AES-GCM under a key made from
+  // the code (PBKDF2-SHA256), and only the right code turns it back into something usable.
+  const ITERATIONS = 600000;
+  const form = document.getElementById('form');
+  const input = document.getElementById('code');
+  const go = document.getElementById('go');
+  const message = document.getElementById('message');
+  let sealed = null;
+
+  function say(text, bad) {
+    message.textContent = text;
+    message.className = bad ? 'bad' : '';
+  }
+
+  async function fetchSealed() {
+    if (!sealed) {
+      const response = await fetch('data.bin');
+      if (!response.ok) throw new Error('The files could not be downloaded (' + response.status + ').');
+      sealed = new Uint8Array(await response.arrayBuffer());
+    }
+    return sealed;
+  }
+
+  async function unlock(code) {
+    const data = await fetchSealed();
+    const salt = data.subarray(0, 16), iv = data.subarray(16, 28), body = data.subarray(28);
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(code), 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: salt, iterations: ITERATIONS, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    try {
+      return await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, body);
+    } catch (e) {
+      return null; // the wrong code: the check built into AES-GCM fails
+    }
+  }
+
+  async function start(pack) {
+    say('Starting...');
+    const engine = new Engine({ executable: 'engine', canvasResizePolicy: 2, focusCanvas: true, args: [] });
+    await engine.init('engine');
+    await engine.preloadFile(pack, 'game.pck');
+    document.getElementById('lock').remove();
+    document.getElementById('canvas').style.display = 'block';
+    await engine.start({ args: ['--main-pack', 'game.pck'] });
+  }
+
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const code = input.value.toLowerCase().replace(/[\s-]/g, '');
+    if (!code) { say('Type the code first.', true); return; }
+    if (!window.crypto || !crypto.subtle) { say('This page has to be opened over https.', true); return; }
+    const missing = Engine.getMissingFeatures({ threads: false });
+    if (missing.length) { say('This browser cannot run it: ' + missing.join(', '), true); return; }
+    go.disabled = true; input.disabled = true;
+    say('Checking the code...');
+    try {
+      const pack = await unlock(code);
+      if (!pack) {
+        say('That code is not right. Check it and try again.', true);
+        go.disabled = false; input.disabled = false; input.select();
+        return;
+      }
+      await start(pack);
+    } catch (e) {
+      console.error(e);
+      say('Something went wrong: ' + (e && e.message ? e.message : e), true);
+      go.disabled = false; input.disabled = false;
+    }
+  });
+  input.focus();
+}());
+</script>
+</body>
+</html>
