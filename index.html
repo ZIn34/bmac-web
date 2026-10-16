@@ -35,6 +35,35 @@ canvas:focus { outline: none; }
   // Everything here is locked: data.bin is scrambled with AES-GCM under a key made from
   // the code (PBKDF2-SHA256), and only the right code turns it back into something usable.
   const ITERATIONS = 600000;
+
+  // Sound: browsers keep a page's sound off until it is clicked or typed in, and the game
+  // only starts a few seconds after the Unlock click. So every sound system the game makes
+  // is kept here and switched on at each click, tap or key press (and straight away, in
+  // browsers that remember the Unlock click). iPhones and iPads play it even on silent.
+  const sounds = [];
+  const NativeAudioContext = window.AudioContext || window.webkitAudioContext;
+  if (NativeAudioContext) {
+    const Tracked = function (...args) {
+      const context = new NativeAudioContext(...args);
+      sounds.push(context);
+      context.resume().catch(function () {});
+      return context;
+    };
+    Tracked.prototype = NativeAudioContext.prototype;
+    window.AudioContext = Tracked;
+    window.webkitAudioContext = Tracked;
+  }
+  const soundOn = function () {
+    for (const context of sounds) {
+      if (context.state !== 'running') context.resume().catch(function () {});
+    }
+  };
+  for (const kind of ['pointerdown', 'mousedown', 'touchend', 'keydown']) {
+    window.addEventListener(kind, soundOn, true);
+  }
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = 'playback'; } catch (e) {}
+  }
   const form = document.getElementById('form');
   const input = document.getElementById('code');
   const go = document.getElementById('go');
